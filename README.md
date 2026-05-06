@@ -49,17 +49,6 @@ The service is implemented as an asynchronous backend:
 - Returns uncertainty-aware outputs (`ERS_uncertainty`, confidence interval bounds).
 - Current Stage 5 quality is reported on proxy labels and should be upgraded to supervised targets in future work.
 
-## What is implemented in Week 3
-
-- FastAPI service with async analysis submission endpoint
-- PostgreSQL persistence for session lifecycle and result payloads
-- Celery + Redis worker queue for background processing
-- OpenFace extraction in worker container (`FeatureExtraction`)
-- Stage 2 ResNet baseline modules and inference wrapper
-- Stage 3 Bi-LSTM baseline modules and inference wrapper
-- Refactored Stage 4 rule-based scoring
-- Stage 5 Bayesian combiner with MC Dropout inference path
-- Docker Compose local environment (API, OpenFace worker, Redis, Postgres)
 
 ## Project structure (current)
 
