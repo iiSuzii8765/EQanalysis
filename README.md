@@ -1,4 +1,4 @@
-# EQ Philosophy Backend (Week 3 Learned Pipeline)
+# EQ Philosophy Backend
 
 This repository contains a runnable backend for video-based emotion regulation analytics with OpenFace extraction, Stage 2/3 learned models, Stage 4 philosophy-derived scoring, and Stage 5 Bayesian fusion.
 
