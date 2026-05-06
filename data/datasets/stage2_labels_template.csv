@@ -1,0 +1,3 @@
+image,emotion,valence,arousal
+sample1.jpg,3,0.75,0.55
+sample2.jpg,4,-0.60,0.40

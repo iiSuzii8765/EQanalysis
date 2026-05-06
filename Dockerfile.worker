@@ -1,0 +1,39 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+ENV OPENFACE_BINARY=/opt/openface/build/bin/FeatureExtraction
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    unzip \
+    libdlib-dev \
+    libopenblas-dev \
+    liblapack-dev \
+    libboost-all-dev \
+    libopencv-dev \
+    ffmpeg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 https://github.com/TadasBaltrusaitis/OpenFace.git /opt/openface \
+    && cd /opt/openface \
+    && bash download_models.sh \
+    && mkdir -p build \
+    && cd build \
+    && cmake -D CMAKE_BUILD_TYPE=Release .. \
+    && cmake --build . --config Release -- -j2
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["celery", "-A", "app.celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo"]

@@ -1,0 +1,2 @@
+"""Philosophy module packages."""
+
