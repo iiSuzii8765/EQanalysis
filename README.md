@@ -2,10 +2,6 @@
 
 This repository contains a runnable backend for video-based emotion regulation analytics with OpenFace extraction, Stage 2/3 learned models, Stage 4 philosophy-derived scoring, and Stage 5 Bayesian fusion.
 
-## Abstract
-
-Emotional quotient (EQ) is pertinent in every aspect of life. Philosophical principles combined with EQ can help balance intelligence, support mental health, and strengthen human resources in fast-moving environments. This project operationalizes that idea as a backend system that extracts facial emotion dynamics from unconstrained real-world video and processes them through four analysis layers: spatial perception, temporal modeling, interpretable philosophy-derived feature scoring, and Bayesian score fusion. The philosophy frameworks used are Appraisal (F1), Somatic Marker (F2), Phenomenology (F3), and Cognitive Load (F4). Using AffectNet-based training assets, the system applies temporal sequence modeling with a bidirectional LSTM and uncertainty-aware fusion with Monte Carlo dropout. In the current prototype, Stage 2 reaches validation macro-F1 of about 0.666 on a stratified AffectNet split, and Stage 5 reaches strong correlation and confidence-interval behavior on bootstrapped proxy targets. These results demonstrate architectural novelty, engineering feasibility, and a practical path toward future supervised clinical and executive-coaching validation.
-
 ## System architecture
 
 The service is implemented as an asynchronous backend:
@@ -64,7 +60,7 @@ app/
   tasks.py           # Background task entrypoint
   openface_extractor.py  # OpenFace FeatureExtraction runner
   scoring.py             # Stage-4 score orchestration helpers
-  pipeline.py            # Week 3 orchestration pipeline
+  pipeline.py            
 models/
   stage2_spatial/        # ResNet baseline, loss, training, inference
   stage3_temporal/       # Bi-LSTM baseline, training, inference
