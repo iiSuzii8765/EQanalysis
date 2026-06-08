@@ -32,7 +32,7 @@ RUN git clone --depth 1 https://github.com/TadasBaltrusaitis/OpenFace.git /opt/o
     && cmake --build . --config Release -- -j2
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 300 --retries 5 -r requirements.txt
 
 COPY . .
 
