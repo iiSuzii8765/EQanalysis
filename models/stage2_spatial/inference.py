@@ -43,6 +43,10 @@ class Stage2InferenceConfig:
     checkpoint_path: str | None
     device: str = "cpu"
     batch_size: int = 8
+    # Weight for AU-based emotion prior blending (applied on top of model output).
+    # 0.0 = model-only; 0.4 = blend 60% model + 40% AU priors (good for natural video).
+    # Ignored if no AU data is supplied.
+    au_blend_alpha: float = 0.4
 
 
 class Stage2InferenceRunner:
@@ -97,9 +101,14 @@ class Stage2InferenceRunner:
         au_probs_arr = np.asarray(au_probs, dtype=np.float32)
         embed_arr = np.asarray(embeddings, dtype=np.float32)
 
-        if not self._checkpoint_loaded and openface_au_matrix is not None and len(openface_au_matrix) == len(frames):
-            # Fallback while training checkpoints are absent: fuse weak image model outputs with AU-derived priors.
-            emotion_probs_arr = _blend_emotion_priors(emotion_probs_arr, openface_au_matrix, openface_au_keys)
+        # Always blend AU-based priors when AU data is available, regardless of whether the
+        # checkpoint is loaded.  The trained model has a domain gap (AffectNet stills vs. natural
+        # video), so AU-derived priors from OpenFace help correct subtle real-world expressions
+        # that the model under-detects (e.g. natural sadness, disgust).  When no checkpoint is
+        # loaded the blend weight is raised to 0.65 so the AU priors dominate entirely.
+        effective_alpha = self.config.au_blend_alpha if self._checkpoint_loaded else 0.65
+        if effective_alpha > 0.0 and openface_au_matrix is not None and len(openface_au_matrix) == len(frames):
+            emotion_probs_arr = _blend_emotion_priors(emotion_probs_arr, openface_au_matrix, openface_au_keys, alpha=effective_alpha)
             va_arr = _blend_valence_arousal(va_arr, openface_au_matrix, openface_au_keys)
             projected_openface = _project_openface_aus(
                 openface_au_matrix=openface_au_matrix,
@@ -143,24 +152,27 @@ def _project_openface_aus(openface_au_matrix: np.ndarray, openface_au_keys: list
     return projected
 
 
-def _blend_emotion_priors(model_probs: np.ndarray, au_matrix: np.ndarray, au_keys: list[str] | None) -> np.ndarray:
+def _blend_emotion_priors(model_probs: np.ndarray, au_matrix: np.ndarray, au_keys: list[str] | None, alpha: float = 0.65) -> np.ndarray:
     au = _normalize_au_matrix(au_matrix)
     au_map = _au_map(au, au_keys)
-    scores = np.stack(
-        [
-            _au_col(au_map, "AU04_r") + _au_col(au_map, "AU23_r") + _au_col(au_map, "AU24_r"),
-            _au_col(au_map, "AU09_r") + _au_col(au_map, "AU16_r"),
-            _au_col(au_map, "AU01_r") + _au_col(au_map, "AU02_r") + _au_col(au_map, "AU05_r"),
-            _au_col(au_map, "AU06_r") + _au_col(au_map, "AU12_r"),
-            _au_col(au_map, "AU01_r") + _au_col(au_map, "AU04_r") + _au_col(au_map, "AU15_r"),
-            _au_col(au_map, "AU01_r") + _au_col(au_map, "AU02_r") + _au_col(au_map, "AU26_r"),
-            _au_col(au_map, "AU12_r") + _au_col(au_map, "AU14_r"),
-            np.clip(1.0 - np.mean(au, axis=1), 0.0, 1.0),  # neutral-ish
-        ],
-        axis=1,
-    )
+
+    anger    = _au_col(au_map, "AU04_r") + _au_col(au_map, "AU23_r") + _au_col(au_map, "AU24_r")
+    disgust  = _au_col(au_map, "AU09_r") + _au_col(au_map, "AU16_r")
+    fear     = _au_col(au_map, "AU01_r") + _au_col(au_map, "AU02_r") + _au_col(au_map, "AU05_r")
+    happy    = _au_col(au_map, "AU06_r") + _au_col(au_map, "AU12_r")
+    sadness  = _au_col(au_map, "AU01_r") + _au_col(au_map, "AU04_r") + _au_col(au_map, "AU15_r") + _au_col(au_map, "AU17_r")
+    surprise = _au_col(au_map, "AU01_r") + _au_col(au_map, "AU02_r") + _au_col(au_map, "AU26_r")
+    contempt = _au_col(au_map, "AU12_r") + _au_col(au_map, "AU14_r")
+
+    # Compute the peak emotion activation across the non-neutral classes for each frame.
+    # Neutral is high only when NO other emotion prototype fires, avoiding the old bug where
+    # `1 - mean(all_AUs)` dominated for subtle expressions and masked genuine emotions.
+    peak = np.maximum.reduce([anger, disgust, fear, happy, sadness, surprise, contempt])
+    neutral = np.clip(0.5 - peak, 0.0, 0.5)
+
+    scores = np.stack([anger, disgust, fear, happy, sadness, surprise, contempt, neutral], axis=1)
     scores = scores / (np.sum(scores, axis=1, keepdims=True) + 1e-6)
-    return 0.35 * model_probs + 0.65 * scores
+    return (1.0 - alpha) * model_probs + alpha * scores
 
 
 def _blend_valence_arousal(va_arr: np.ndarray, au_matrix: np.ndarray, au_keys: list[str] | None) -> np.ndarray:

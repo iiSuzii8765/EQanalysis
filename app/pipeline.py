@@ -28,6 +28,7 @@ def run_week3_pipeline(video_path: str, context: str, session_id: str) -> dict:
             checkpoint_path=settings.stage2_checkpoint_path,
             device=settings.inference_device,
             batch_size=settings.inference_batch_size,
+            au_blend_alpha=settings.stage2_au_blend_alpha,
         )
     )
     stage2_outputs = stage2_runner.infer(

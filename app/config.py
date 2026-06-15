@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     inference_device: str = "cpu"
     inference_batch_size: int = 8
     stage5_mc_passes: int = 50
+    # Weight for blending OpenFace AU-based emotion priors with model output (0.0–1.0).
+    # 0.4 is a good default: corrects natural-video domain gap without overriding the model.
+    stage2_au_blend_alpha: float = 0.4
 
     @property
     def upload_path(self) -> Path:
