@@ -19,9 +19,26 @@ The service is implemented as an asynchronous backend:
 ## Six-stage analytics pipeline
 
 ### Stage 1: Video preprocessing and facial signal extraction
-- Input is an unconstrained uploaded video (`.mp4`, `.mov`, `.webm`).
-- Frames are decoded, resized, and aligned with OpenFace outputs.
-- OpenFace provides facial landmarks, action units, gaze/head-pose-related signals used downstream.
+
+Stage 1 has two extraction paths. Both produce a CSV with the same `frame / timestamp / confidence / AU*_r` schema so all downstream stages are path-agnostic.
+
+**Primary path — OpenFace FeatureExtraction** (`app/openface_extractor.py`)
+- Calls the OpenFace binary (`FeatureExtraction`) when it is available in the worker image.
+- Provides 45+ AU intensity columns (`_r`) with sub-frame temporal resolution.
+- Runs in the Docker worker where OpenFace is compiled from source.
+
+**Fallback path — Stage 1 MediaPipe extractor** (`models/stage1_extraction/`)
+- Activated automatically when `OPENFACE_BINARY` does not exist (dev machines, Windows, Docker builds that skip OpenFace compilation).
+- Uses [MediaPipe Face Mesh](https://google.github.io/mediapipe/solutions/face_mesh.html) to detect 468 face landmarks per frame.
+- Computes 25 AU intensity approximations from landmark geometry:
+  - Distances are normalized by inter-ocular distance (IOD) so output is scale-invariant.
+  - AU intensities are clipped to [0, 5] to match OpenFace's `_r` range.
+  - AU mapping: inner/outer brow elevation (AU01/02), brow lowering (AU04), eye opening (AU05/07/43/45), cheek (AU06), nose (AU09), lip corner pull/depress (AU12/15), mouth geometry (AU14/20/22/23/24/25/26/28), chin (AU17), single-frame blink detection (AU45).
+  - AUs with no reliable 2-D proxy (AU11, AU13, AU18 and partial AU16) are held at 0; they are not used in the philosophy scoring formulae.
+- Written to the same output path as OpenFace so the pipeline is unchanged.
+- Controlled by `STAGE1_USE_MEDIAPIPE_FALLBACK=true` (default).
+
+The fallback produces slightly coarser AU estimates than OpenFace (no sub-pixel tracking, no 3-D head-pose correction) but is sufficient for F1–F4 scoring and Stage 3 temporal input.
 
 ### Stage 2: Spatial perception (ResNet-based)
 - Per-frame model predicts emotion class, valence/arousal, and AU-related targets.
@@ -89,19 +106,22 @@ Each domain score (0–100) is derived from the session-level aggregates of the 
 
 ```text
 app/
-  main.py            # FastAPI app and API endpoints
-  config.py          # Environment settings
-  db.py              # SQLAlchemy engine/session/base
-  models.py          # AnalysisSession model
-  schemas.py         # API response models
-  services.py        # Session lifecycle helpers
-  celery_app.py      # Celery app config
-  tasks.py           # Background task entrypoint
-  openface_extractor.py  # OpenFace FeatureExtraction runner
-  scoring.py             # Stage-4 score orchestration helpers
+  main.py                # FastAPI app and API endpoints
+  config.py              # Environment settings (incl. STAGE1_USE_MEDIAPIPE_FALLBACK)
+  db.py                  # SQLAlchemy engine/session/base
+  models.py              # AnalysisSession model
+  schemas.py             # API response models
+  services.py            # Session lifecycle helpers
+  celery_app.py          # Celery app config
+  tasks.py               # Background task entrypoint
+  openface_extractor.py  # Stage 1 dispatcher: OpenFace primary, MediaPipe fallback
+  scoring.py             # Stage 4 score orchestration helpers
   stage6_eq_profile.py   # Stage 6: Goleman domain mapping and wellness flag
-  pipeline.py            
+  pipeline.py
 models/
+  stage1_extraction/     # Stage 1 MediaPipe AU extractor (fallback path)
+    mediapipe_au.py      #   Landmark → AU intensity computation (25 AUs, normalized by IOD)
+    inference.py         #   Stage1ExtractionConfig / Stage1ExtractionRunner
   stage2_spatial/        # ResNet baseline, loss, training, inference
   stage3_temporal/       # Bi-LSTM baseline, training, inference
   philosophy_module/
@@ -110,6 +130,8 @@ models/
 data/preprocessing/
   extract_frames.py      # Frame decoding/resizing
   segment_windows.py     # Window segmentation helpers
+scripts/
+  seed_checkpoints.py    # Seed Stage 2/3/5 initial checkpoints before training
 evaluation/
   metrics.py             # Result summarization helpers
   smoke_test.py          # End-to-end API smoke test
@@ -597,6 +619,25 @@ The following is a representative result payload from a completed async run (win
   "error_message": null
 }
 ```
+
+## Checkpoint setup
+
+The `artifacts/` directory is git-ignored except for `artifacts/checkpoints/*.pt` files. Before running
+the pipeline for the first time (or after cloning into a fresh environment), seed the initial checkpoints:
+
+```bash
+python scripts/seed_checkpoints.py
+```
+
+This writes three checkpoint files:
+
+| File | What it contains |
+|---|---|
+| `stage2_resnet.pt` | ImageNet-pretrained ResNet-50 backbone with zero-initialised emotion/VA/AU task heads. The backbone already encodes strong visual features; only task heads need further fine-tuning. |
+| `stage3_bilstm.pt` | BiLSTM with PyTorch-default cell init and near-zero output head weights. Training will pull it away from this neutral starting point. |
+| `stage5_bayes.pt` | BayesPhiloNet trained on 10 000 synthetic (φ, ERS) pairs so that it reproduces the analytic formula `ERS = 0.28·F1 + 0.34·F2 + 0.18·(1−F3) + 0.20·F4` from day one. This gives sensible ERS outputs immediately without any labelled sessions. |
+
+After running the seed script, follow the full training pipelines below to replace these seeds with real data-driven weights.
 
 ## Model artifact paths
 

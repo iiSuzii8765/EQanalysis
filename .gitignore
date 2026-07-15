@@ -13,6 +13,9 @@ dist/
 .mypy_cache/
 .ruff_cache/
 artifacts/
+# Seed checkpoints are committed so the pipeline starts from a meaningful state.
+!artifacts/checkpoints/
+!artifacts/checkpoints/*.pt
 storage/uploads/*
 storage/reports/*
 !storage/uploads/.gitkeep

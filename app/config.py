@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     # Weight for blending OpenFace AU-based emotion priors with model output (0.0–1.0).
     # 0.4 is a good default: corrects natural-video domain gap without overriding the model.
     stage2_au_blend_alpha: float = 0.4
+    # Use the Stage 1 MediaPipe extractor as a fallback when the OpenFace binary
+    # is not available (dev machines, Windows, Docker builds without OpenFace).
+    stage1_use_mediapipe_fallback: bool = True
 
     @property
     def upload_path(self) -> Path:
