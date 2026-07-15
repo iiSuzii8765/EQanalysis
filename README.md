@@ -1,6 +1,6 @@
 # EQ Philosophy Backend
 
-This repository contains a runnable backend for video-based emotion regulation analytics with OpenFace extraction, Stage 2/3 learned models, Stage 4 philosophy-derived scoring, and Stage 5 Bayesian fusion.
+This repository contains a runnable backend for video-based emotion regulation analytics with OpenFace extraction, Stage 2/3 learned models, Stage 4 philosophy-derived scoring, Stage 5 Bayesian fusion, and Stage 6 Goleman Five-Domain EQ profile aggregation.
 
 ## System architecture
 
@@ -13,9 +13,10 @@ The service is implemented as an asynchronous backend:
 - Stage 3 aggregates frame dynamics into temporal sequence signals.
 - Stage 4 computes interpretable philosophy-derived scores (F1-F4).
 - Stage 5 fuses Stage 4 signals into ERS with uncertainty using Bayesian inference.
-- API returns window-level and session-level JSON outputs.
+- Stage 6 aggregates per-window ERS outputs across the full session and maps them to the Goleman Five-Domain EQ framework.
+- API returns window-level ERS outputs and a session-level Goleman EQ profile.
 
-## Five-stage analytics pipeline
+## Six-stage analytics pipeline
 
 ### Stage 1: Video preprocessing and facial signal extraction
 - Input is an unconstrained uploaded video (`.mp4`, `.mov`, `.webm`).
@@ -45,6 +46,44 @@ The service is implemented as an asynchronous backend:
 - Returns uncertainty-aware outputs (`ERS_uncertainty`, confidence interval bounds).
 - Current Stage 5 quality is reported on proxy labels and should be upgraded to supervised targets in future work.
 
+### Stage 6: EQ profile engine (Goleman Five-Domain aggregation)
+- Aggregates all per-window Stage 5 outputs across the full session (10–60 minutes).
+- Maps session statistics to the Goleman Five-Domain EQ framework (0–100 per domain).
+- Produces `top_insights`: timestamped suppression spikes with plain-English coaching suggestions.
+- Computes a `wellness_flag` as a single-session proxy for the DERS sustained-suppression signal.
+
+#### Goleman Five-Domain quantification
+
+Each domain score (0–100) is derived from the session-level aggregates of the philosophy scores and regulation statistics.
+
+| Domain | Formula | What it measures |
+|---|---|---|
+| **Self-Awareness** | `100 × (1 − F2_somatic) × F3_coherence` | How clearly you recognise your own emotional state. Low somatic leakage combined with high phenomenological coherence indicates your inner experience and outer signal are aligned. |
+| **Self-Regulation** | `100 × (1 − suppression_ratio) × (1 − ERS_variability)` | Ability to manage emotions without hiding them. Low suppression across windows combined with stable ERS means you're processing rather than masking. |
+| **Motivation** | `100 × mean(F1_appraisal in high-arousal windows)` | Goal-directed drive during emotionally activated moments. High appraisal during high-ERS windows means you engage constructively under pressure rather than withdrawing. |
+| **Empathy** | `100 × F3_coherence × (1 − F2_somatic)` | Attunement and presence. Rewards phenomenological coherence (signal integration) while penalising somatic suppression (signals you are not fully present). Structurally similar to self-awareness but weighted toward receptivity rather than self-knowledge. |
+| **Social Skills** | `100 × reappraisal_ratio × (1 − F4_cognitive)` | Capacity to influence and manage relationships. High reappraisal (a constructive strategy) combined with low cognitive load means you have the mental bandwidth available to engage the other person rather than being consumed by your own regulation effort. |
+
+`overall_eq_score` is the simple mean of the five domain scores.
+
+#### Session-level aggregates used
+
+| Variable | Definition |
+|---|---|
+| `ERS_mean` | Mean of all window ERS values |
+| `ERS_peak` | Max ERS across all windows |
+| `ERS_variability` | Standard deviation of window ERS values |
+| `suppression_ratio` | Fraction of windows where `regulation_strategy == "suppression"` |
+| `reappraisal_ratio` | Fraction of windows where `regulation_strategy == "reappraisal"` |
+| `mean_F2` | Mean `F2_somatic` across all windows |
+| `mean_F3` | Mean `F3_coherence` across all windows |
+| `mean_F4` | Mean `F4_cognitive` across all windows |
+| `mean_uncertainty` | Mean `ERS_uncertainty` across all windows |
+
+#### Wellness flag
+
+`wellness_flag` is a private safeguard. It triggers when more than 50% of windows in a session are classified as suppression **and** ERS variability is below 0.15 (a flat, chronically suppressed pattern). The full multi-session version of this signal requires three or more sessions showing the same pattern before firing a private notification to the user's designated coach. The flag never labels the user with a clinical term.
+
 
 ## Project structure (current)
 
@@ -60,6 +99,7 @@ app/
   tasks.py           # Background task entrypoint
   openface_extractor.py  # OpenFace FeatureExtraction runner
   scoring.py             # Stage-4 score orchestration helpers
+  stage6_eq_profile.py   # Stage 6: Goleman domain mapping and wellness flag
   pipeline.py            
 models/
   stage2_spatial/        # ResNet baseline, loss, training, inference
@@ -88,6 +128,7 @@ evaluation/
 
 - Worker image compiles OpenFace from source and downloads models.
 - Initial worker build can take several minutes.
+- `docker-compose.yml` passes `network: host` for the worker build so the `git clone` step can reach `github.com` through the host's DNS. If your Docker daemon runs in a sandbox that blocks host networking (e.g. Docker Desktop on Mac/Windows), you may need to pre-pull the image on a machine with network access and export/import it, or configure a Docker build proxy.
 - If the worker fails during OpenFace compilation, rerun build with:
   - `docker compose build worker --no-cache`
 - Week 3 adds PyTorch and torchvision to the images, so rebuild times are longer than Week 2.
@@ -111,21 +152,55 @@ evaluation/
 
 ## Output semantics
 
-- `pipeline_version = week3-stage2-stage3-stage5` means the Week 3 orchestration path is active.
+- `pipeline_version = week3-stage2-stage3-stage5-stage6` means the full six-stage path is active.
 - If checkpoints are missing, Stage 2/3/5 fall back to checkpoint-free baseline behavior while preserving the same interfaces.
 - Once checkpoints are trained and placed under `artifacts/checkpoints/`, the worker will load them automatically.
-- Response now includes `model_status` so you can verify whether Stage 2/3/5 checkpoints were actually loaded.
+- Response includes `model_status` so you can verify whether Stage 2/3/5 checkpoints were actually loaded.
+- `eq_profile` is always present in the result, even when checkpoints are missing (scores reflect baseline model outputs).
 
 ## Full output JSON example
 
-The following is a full result payload example from a completed async run:
+The following is a representative result payload from a completed async run (windows list truncated for brevity).
 
 ```json
 {
   "session_id": "7a82f3da-de18-4732-9d9e-128bf44c2fb9",
   "status": "completed",
   "result": {
-    "context": "string",
+    "session_processed_at": "2026-04-24T08:28:41.172542+00:00",
+    "pipeline_version": "week3-stage2-stage3-stage5-stage6",
+    "session_id": "7a82f3da-de18-4732-9d9e-128bf44c2fb9",
+    "video_path": "storage/uploads/03d2bb66-0834-40f1-a5f9-122d9ea348dc.mp4",
+    "openface_csv_path": "artifacts/openface/7a82f3da.../03d2bb66....csv",
+    "context": "pitch",
+    "windows_count": 15,
+    "model_status": {
+      "stage2_checkpoint_loaded": true,
+      "stage3_checkpoint_loaded": true,
+      "stage5_checkpoint_loaded": true
+    },
+    "eq_profile": {
+      "goleman_eq_profile": {
+        "self_awareness": 29,
+        "self_regulation": 96,
+        "motivation": 59,
+        "empathy": 29,
+        "social_skills": 0
+      },
+      "overall_eq_score": 43,
+      "session_summary": {
+        "ERS_mean": 0.798,
+        "ERS_peak": 0.859,
+        "ERS_variability": 0.041,
+        "suppression_ratio": 0.0,
+        "reappraisal_ratio": 0.0,
+        "dysregulation_ratio": 0.0,
+        "mean_uncertainty": 0.059,
+        "dominant_strategy": "expression"
+      },
+      "top_insights": [],
+      "wellness_flag": false
+    },
     "windows": [
       {
         "ERS": 0.816,
@@ -518,26 +593,6 @@ The following is a full result payload example from a completed async run:
         "regulation_strategy": "expression"
       }
     ],
-    "session_id": "7a82f3da-de18-4732-9d9e-128bf44c2fb9",
-    "video_path": "storage/uploads/03d2bb66-0834-40f1-a5f9-122d9ea348dc.mp4",
-    "model_status": {
-      "stage2_checkpoint_loaded": true,
-      "stage3_checkpoint_loaded": true,
-      "stage5_checkpoint_loaded": true
-    },
-    "windows_count": 15,
-    "session_summary": {
-      "ERS_mean": 0.798,
-      "ERS_peak": 0.859,
-      "ERS_variability": 0.041,
-      "mean_uncertainty": 0.059,
-      "reappraisal_ratio": 0,
-      "suppression_ratio": 0,
-      "dysregulation_ratio": 0
-    },
-    "pipeline_version": "week3-stage2-stage3-stage5",
-    "openface_csv_path": "artifacts/openface/7a82f3da-de18-4732-9d9e-128bf44c2fb9/03d2bb66-0834-40f1-a5f9-122d9ea348dc.csv",
-    "session_processed_at": "2026-04-24T08:28:41.172542+00:00"
   },
   "error_message": null
 }

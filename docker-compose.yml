@@ -18,6 +18,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.worker
+      network: host
     command: celery -A app.celery_app.celery_app worker --loglevel=info --pool=solo
     env_file:
       - .env

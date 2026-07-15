@@ -9,6 +9,7 @@ import pandas as pd
 from app.config import settings
 from app.openface_extractor import run_openface
 from app.scoring import classify_strategy, compute_f_scores
+from app.stage6_eq_profile import compute_goleman_profile
 from data.preprocessing.extract_frames import load_video_frames, resize_frames
 from data.preprocessing.segment_windows import segment_indices
 from models.philosophy_module.stage5_bayesian.inference import Stage5InferenceConfig, Stage5InferenceRunner
@@ -97,7 +98,7 @@ def run_week3_pipeline(video_path: str, context: str, session_id: str) -> dict:
 
     return {
         "session_processed_at": datetime.now(timezone.utc).isoformat(),
-        "pipeline_version": "week3-stage2-stage3-stage5",
+        "pipeline_version": "week3-stage2-stage3-stage5-stage6",
         "session_id": session_id,
         "video_path": str(Path(video_path)),
         "openface_csv_path": str(csv_path),
@@ -108,7 +109,7 @@ def run_week3_pipeline(video_path: str, context: str, session_id: str) -> dict:
             "stage3_checkpoint_loaded": bool(stage3_runner.checkpoint_loaded),
             "stage5_checkpoint_loaded": bool(stage5_runner.checkpoint_loaded),
         },
-        "session_summary": _compute_session_summary(output_windows),
+        "eq_profile": compute_goleman_profile(output_windows),
         "windows": output_windows,
     }
 
@@ -314,23 +315,6 @@ def _compute_baseline(windows: list[dict]) -> dict[str, float]:
     return {
         "variability": float(np.mean([w["emotion_variability"] for w in windows])) + 1e-6,
         "transition_rate": float(np.mean([w["transition_rate"] for w in windows])) + 1e-6,
-    }
-
-
-def _compute_session_summary(output_windows: list[dict]) -> dict:
-    ers_values = [w["ERS"] for w in output_windows]
-    strategies = [w["regulation_strategy"] for w in output_windows]
-    suppression_ratio = sum(1 for s in strategies if s == "suppression") / len(strategies)
-    reappraisal_ratio = sum(1 for s in strategies if s == "reappraisal") / len(strategies)
-    dysreg_ratio = sum(1 for s in strategies if s == "dysregulation") / len(strategies)
-    return {
-        "ERS_mean": round(float(np.mean(ers_values)), 3),
-        "ERS_peak": round(float(np.max(ers_values)), 3),
-        "ERS_variability": round(float(np.std(ers_values)), 3),
-        "suppression_ratio": round(float(suppression_ratio), 3),
-        "reappraisal_ratio": round(float(reappraisal_ratio), 3),
-        "dysregulation_ratio": round(float(dysreg_ratio), 3),
-        "mean_uncertainty": round(float(np.mean([w["ERS_uncertainty"] for w in output_windows])), 3),
     }
 
 
